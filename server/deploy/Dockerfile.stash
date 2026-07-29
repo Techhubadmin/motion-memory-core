@@ -26,4 +26,31 @@ USER nonroot:nonroot
 ENTRYPOINT ["/stash"]
 # `serve` runs the HTTP (health/metrics), MCP (/mcp + /sse on :8080), and
 # consolidation services together.
-CMD ["serve"]
+#
+# --consolidate-interval: the default is 5m, which cost ~$61/day and drained the
+# OpenRouter account to zero overnight on 2026-07-29. Measured from the credit
+# sentinel's hourly probes: the balance fell at an almost perfectly constant
+# ~$2.55/hour from 02:06Z ($14.61) to 08:00Z (-$0.12) — flat straight through
+# hours when nobody was working, which is what proves the spend was driven by
+# this loop rather than by agent traffic. At 5m the service re-consolidates
+# EVERY namespace (~20 of them) 288 times a day, and because
+# STASH_CONSOLIDATION_WINDOW defaults to 168h each pass reconsiders a 7-day
+# episode window — so the same episodes are re-reasoned over and over. For a
+# knowledge base that receives a few dozen memories a day, hourly is ample.
+#
+# ⚠️ This is a CLI FLAG, not an env var. There is no STASH_CONSOLIDATION_INTERVAL
+# in internal/config/config.go — setting one has no effect. The flag is defined
+# on the top-level `serve` command in cmd/cli/main.go. Railway has no custom
+# start command, so this CMD is what actually runs.
+#
+# TRADE-OFF, deliberately accepted: `recall` surfaces CONSOLIDATED facts, so a
+# memory written now takes up to an hour (rather than ~5 minutes) to become
+# retrievable as a fact. Raw episodes are durable and searchable immediately.
+# Lower this back toward 15m if multi-session work starts tripping over stale
+# recall; that is the symptom to watch for.
+#
+# NOT set here on purpose: --consolidate-namespaces. It REPLACES the "all"
+# default with a fixed list, so any namespace created later would silently never
+# consolidate. The dead probe namespaces it would have excluded log
+# `llm_calls: 0` at ~5ms each, so they cost nothing worth that risk.
+CMD ["serve", "--consolidate-interval=1h"]
