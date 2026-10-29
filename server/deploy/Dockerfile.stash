@@ -13,7 +13,14 @@ RUN apk add --no-cache git ca-certificates
 ARG STASH_REPO=https://github.com/Techhubadmin/stash.git
 ARG STASH_REF=main
 WORKDIR /src
-RUN git clone --depth 1 --branch "${STASH_REF}" "${STASH_REPO}" .
+# 🔴 CACHE-BUST THE CLONE. The RUN line below is textually identical on every build, so a
+# cached layer would keep serving whatever stash commit it first cloned — a rebuild here can
+# silently ship old engine code (2026-10-29 audit: the recall fix, stash#1, could not reach
+# production by rebuilding alone). Fetching the ref's current commit first makes Docker's
+# cache key change whenever STASH_REF moves on Techhubadmin/stash.
+ADD https://api.github.com/repos/Techhubadmin/stash/commits/${STASH_REF} /tmp/stash-ref.json
+# The printed commit is the evidence of WHAT was built — read it in the build log.
+RUN git clone --depth 1 --branch "${STASH_REF}" "${STASH_REPO}" . && echo "stash build commit: $(git rev-parse HEAD)"
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
