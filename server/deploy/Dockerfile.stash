@@ -11,16 +11,26 @@
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 ARG STASH_REPO=https://github.com/Techhubadmin/stash.git
-ARG STASH_REF=main
+# STASH_REF must name an immutable release tag (deploy-<date>-<ticket>-<sha7>, protected
+# from update and deletion by the stash repo's deploy-* ruleset). Set it on the Railway
+# `stash` service only. There is deliberately no default: an unset or branch-name ref fails
+# the build instead of silently shipping whatever `main` holds today.
+ARG STASH_REF=
 WORKDIR /src
-# 🔴 CACHE-BUST THE CLONE. The RUN line below is textually identical on every build, so a
-# cached layer would keep serving whatever stash commit it first cloned — a rebuild here can
-# silently ship old engine code (2026-10-29 audit: the recall fix, stash#1, could not reach
-# production by rebuilding alone). Fetching the ref's current commit first makes Docker's
-# cache key change whenever STASH_REF moves on Techhubadmin/stash.
-ADD https://api.github.com/repos/Techhubadmin/stash/commits/${STASH_REF} /tmp/stash-ref.json
+# Cache correctness. On 2026-10-29 a rebuild kept serving an old stash commit because
+# STASH_REF was the moving branch `main`: the clone layer's cache key never changed. With an
+# immutable tag the ref NAME is the version, and since STASH_REF is used in the RUN below
+# its value is part of that layer's cache key — a new tag always re-clones, and a tag
+# cannot move under a cached layer. That replaces the previous `ADD https://api.github.com/
+# ...` cache-bust, which was unauthenticated from Railway's shared builders and failed the
+# first EXEC-75 build with HTTP 403 (rate limit), 2026-11-05.
 # The printed commit is the evidence of WHAT was built — read it in the build log.
-RUN git clone --depth 1 --branch "${STASH_REF}" "${STASH_REPO}" . && echo "stash build commit: $(git rev-parse HEAD)"
+RUN case "${STASH_REF}" in \
+	deploy-?*) ;; \
+	*) echo "STASH_REF must be a deploy-* release tag on Techhubadmin/stash, got '${STASH_REF}'" >&2; exit 1 ;; \
+	esac \
+	&& git clone --depth 1 --branch "${STASH_REF}" "${STASH_REPO}" . \
+	&& echo "stash build commit: $(git rev-parse HEAD)"
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
